@@ -73,6 +73,10 @@ try {
 }
 ```
 
+## Documentation
+
+For more information, check out the full documentation at https://docs.nslsolver.com
+
 ## License
 
 MIT
