@@ -38,6 +38,24 @@ const { cookies, userAgent } = await solver.solveChallenge({
 });
 ```
 
+### Kasada
+
+```js
+const { headers } = await solver.solveKasada({
+  url: 'https://example.com/api',
+  userAgent: 'Mozilla/5.0 ... Chrome/131.0.0.0 ...',
+  uaVersion: 131,
+  kasadaConfig: {
+    pJsPath: '/149e9513-01fa-4fb0-aad4-566afd725d1b/2d206a39-8ed7-437e-a3be-862e0f06eea3/p.js',
+    fpHost: 'https://fp.example.com',
+    tlHost: 'https://tl.example.com',
+    // cdConstant is optional
+  },
+  // proxy is optional
+});
+// headers["x-kpsdk-ct"], headers["x-kpsdk-cd"], etc.
+```
+
 ### Balance
 
 ```js

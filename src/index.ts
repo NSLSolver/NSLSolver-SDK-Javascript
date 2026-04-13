@@ -20,6 +20,21 @@ export interface ChallengeParams {
   userAgent?: string;
 }
 
+export interface KasadaConfig {
+  pJsPath: string;
+  fpHost: string;
+  tlHost: string;
+  cdConstant?: string;
+}
+
+export interface KasadaParams {
+  url: string;
+  userAgent: string;
+  uaVersion: number;
+  kasadaConfig: KasadaConfig;
+  proxy?: string;
+}
+
 export interface TurnstileResult {
   token: string;
   type: "turnstile";
@@ -32,6 +47,16 @@ export interface ChallengeResult {
   };
   userAgent: string;
   type: "challenge";
+}
+
+export interface KasadaResult {
+  headers: {
+    "x-kpsdk-ct": string;
+    "x-kpsdk-cd": string;
+    "x-kpsdk-v": string;
+    "x-kpsdk-h": string;
+  };
+  type: "kasada";
 }
 
 export interface BalanceResult {
@@ -59,6 +84,17 @@ interface APISolveChallengeBody {
   cookies: { cf_clearance: string; [key: string]: string };
   user_agent: string;
   type: "challenge";
+}
+
+interface APISolveKasadaBody {
+  success: true;
+  headers: {
+    "x-kpsdk-ct": string;
+    "x-kpsdk-cd": string;
+    "x-kpsdk-v": string;
+    "x-kpsdk-h": string;
+  };
+  type: "kasada";
 }
 
 interface APIBalanceBody {
@@ -120,7 +156,7 @@ const DEFAULT_BASE_URL = "https://api.nslsolver.com";
 const DEFAULT_TIMEOUT = 120_000;
 const DEFAULT_MAX_RETRIES = 3;
 
-/** API client for solving Cloudflare Turnstile and Challenge captchas. */
+/** API client for solving Cloudflare Turnstile, Challenge, and Kasada captchas. */
 export class NSLSolver {
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -172,6 +208,32 @@ export class NSLSolver {
     return {
       cookies: data.cookies,
       userAgent: data.user_agent,
+      type: data.type,
+    };
+  }
+
+  /** Solve a Kasada challenge. */
+  async solveKasada(params: KasadaParams): Promise<KasadaResult> {
+    const kasadaConfig: Record<string, unknown> = {
+      p_js_path: params.kasadaConfig.pJsPath,
+      fp_host: params.kasadaConfig.fpHost,
+      tl_host: params.kasadaConfig.tlHost,
+    };
+    if (params.kasadaConfig.cdConstant !== undefined) kasadaConfig.cd_constant = params.kasadaConfig.cdConstant;
+
+    const body: Record<string, unknown> = {
+      type: "kasada",
+      url: params.url,
+      user_agent: params.userAgent,
+      ua_version: params.uaVersion,
+      kasada_config: kasadaConfig,
+    };
+    if (params.proxy !== undefined) body.proxy = params.proxy;
+
+    const data = await this.request<APISolveKasadaBody>("POST", "/solve", body);
+
+    return {
+      headers: data.headers,
       type: data.type,
     };
   }
