@@ -22,7 +22,7 @@ const solver = new NSLSolver('your-api-key');
 ### Turnstile
 
 ```js
-const { token } = await solver.solveTurnstile({
+const { token, cost } = await solver.solveTurnstile({
   siteKey: '0x4AAAAAAAB...',
   url: 'https://example.com',
   // action, cdata, proxy, userAgent are optional
@@ -32,7 +32,7 @@ const { token } = await solver.solveTurnstile({
 ### Challenge
 
 ```js
-const { cookies, userAgent } = await solver.solveChallenge({
+const { cookies, userAgent, cost } = await solver.solveChallenge({
   url: 'https://example.com/protected',
   proxy: 'http://user:pass@host:port',
 });
@@ -41,7 +41,7 @@ const { cookies, userAgent } = await solver.solveChallenge({
 ### Kasada
 
 ```js
-const { headers } = await solver.solveKasada({
+const { headers, cost } = await solver.solveKasada({
   url: 'https://example.com/api',
   userAgent: 'Mozilla/5.0 ... Chrome/131.0.0.0 ...',
   uaVersion: 131,
@@ -59,7 +59,11 @@ const { headers } = await solver.solveKasada({
 ### Balance
 
 ```js
-const { balance, maxThreads, allowedTypes } = await solver.getBalance();
+const { balance, unlimited, allowedTypes, maxCpm, currentCpm, cpmLimit } =
+  await solver.getBalance();
+
+// cpmLimit is the max captchas-per-minute for this key.
+// currentCpm is how many tokens have been consumed in the rolling minute.
 ```
 
 ## Config

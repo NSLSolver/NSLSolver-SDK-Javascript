@@ -35,8 +35,18 @@ export interface KasadaParams {
   proxy?: string;
 }
 
+export interface AkamaiParams {
+  url: string;
+  /** Akamai fingerprints UA — replay with the same value you submit. */
+  userAgent: string;
+  /** Proxy is required. The `_abck` cookie is bound to this proxy's egress IP. */
+  proxy: string;
+}
+
 export interface TurnstileResult {
   token: string;
+  /** USD deducted from the account balance for this solve. */
+  cost: number;
   type: "turnstile";
 }
 
@@ -46,6 +56,10 @@ export interface ChallengeResult {
     [key: string]: string;
   };
   userAgent: string;
+  /** Some challenge pages return a Turnstile-style token alongside the cookies. */
+  token?: string;
+  /** USD deducted from the account balance for this solve. */
+  cost: number;
   type: "challenge";
 }
 
@@ -56,15 +70,34 @@ export interface KasadaResult {
     "x-kpsdk-v": string;
     "x-kpsdk-h": string;
   };
+  /** USD deducted from the account balance for this solve. */
+  cost: number;
   type: "kasada";
+}
+
+export interface AkamaiResult {
+  /** Cookie jar including `_abck`. Replay on the same UA + proxy/exit IP. */
+  cookies: {
+    _abck?: string;
+    bm_sz?: string;
+    ak_bmsc?: string;
+    [key: string]: string | undefined;
+  };
+  /** USD deducted from the account balance for this solve. */
+  cost: number;
+  type: "akamai";
 }
 
 export interface BalanceResult {
   balance: number;
   unlimited: boolean;
   allowedTypes: string[];
-  /** 0 means unlimited */
-  maxThreads: number;
+  /** Per-key captchas-per-minute ceiling. 0 means uncapped. */
+  maxCpm: number;
+  /** Tokens consumed in the rolling CPM window. */
+  currentCpm: number;
+  /** Mirror of maxCpm — useful for dashboards. */
+  cpmLimit: number;
   unlimitedExpiresAt?: string;
 }
 
@@ -76,6 +109,7 @@ interface APIErrorBody {
 interface APISolveTurnstileBody {
   success: true;
   token: string;
+  cost?: number;
   type: "turnstile";
 }
 
@@ -83,6 +117,8 @@ interface APISolveChallengeBody {
   success: true;
   cookies: { cf_clearance: string; [key: string]: string };
   user_agent: string;
+  token?: string;
+  cost?: number;
   type: "challenge";
 }
 
@@ -94,7 +130,15 @@ interface APISolveKasadaBody {
     "x-kpsdk-v": string;
     "x-kpsdk-h": string;
   };
+  cost?: number;
   type: "kasada";
+}
+
+interface APISolveAkamaiBody {
+  success: true;
+  cookies: { [key: string]: string };
+  cost?: number;
+  type: "akamai";
 }
 
 interface APIBalanceBody {
@@ -102,7 +146,9 @@ interface APIBalanceBody {
   balance: number;
   unlimited: boolean;
   allowed_types: string[];
-  max_threads: number;
+  max_cpm: number;
+  current_cpm: number;
+  cpm_limit: number;
   unlimited_expires_at?: string;
 }
 
@@ -156,7 +202,7 @@ const DEFAULT_BASE_URL = "https://api.nslsolver.com";
 const DEFAULT_TIMEOUT = 120_000;
 const DEFAULT_MAX_RETRIES = 3;
 
-/** API client for solving Cloudflare Turnstile, Challenge, and Kasada captchas. */
+/** API client for solving Cloudflare Turnstile, Challenge, Kasada, and Akamai captchas. */
 export class NSLSolver {
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -190,6 +236,7 @@ export class NSLSolver {
 
     return {
       token: data.token,
+      cost: data.cost ?? 0,
       type: data.type,
     };
   }
@@ -208,6 +255,8 @@ export class NSLSolver {
     return {
       cookies: data.cookies,
       userAgent: data.user_agent,
+      token: data.token,
+      cost: data.cost ?? 0,
       type: data.type,
     };
   }
@@ -234,11 +283,30 @@ export class NSLSolver {
 
     return {
       headers: data.headers,
+      cost: data.cost ?? 0,
       type: data.type,
     };
   }
 
-  /** Get account balance and metadata. */
+  /** Solve an Akamai Bot Manager challenge. Both `userAgent` and `proxy` are required. */
+  async solveAkamai(params: AkamaiParams): Promise<AkamaiResult> {
+    const body: Record<string, unknown> = {
+      type: "akamai",
+      url: params.url,
+      user_agent: params.userAgent,
+      proxy: params.proxy,
+    };
+
+    const data = await this.request<APISolveAkamaiBody>("POST", "/solve", body);
+
+    return {
+      cookies: data.cookies,
+      cost: data.cost ?? 0,
+      type: data.type,
+    };
+  }
+
+  /** Get account balance, plan flags, and live CPM usage. */
   async getBalance(): Promise<BalanceResult> {
     const data = await this.request<APIBalanceBody>("GET", "/balance");
 
@@ -246,7 +314,9 @@ export class NSLSolver {
       balance: data.balance,
       unlimited: data.unlimited,
       allowedTypes: data.allowed_types,
-      maxThreads: data.max_threads,
+      maxCpm: data.max_cpm,
+      currentCpm: data.current_cpm,
+      cpmLimit: data.cpm_limit ?? data.max_cpm,
       unlimitedExpiresAt: data.unlimited_expires_at,
     };
   }
