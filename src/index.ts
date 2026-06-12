@@ -43,6 +43,18 @@ export interface AkamaiParams {
   proxy: string;
 }
 
+export interface RecaptchaV3Params {
+  siteKey: string;
+  url: string;
+  /** Proxy is required for reCAPTCHA v3 solves. Format: `protocol://user:pass@host:port` */
+  proxy: string;
+  /** reCAPTCHA action name. Server defaults to `verify` when omitted. */
+  action?: string;
+  /** Set to `true` to solve against reCAPTCHA Enterprise. */
+  enterprise?: boolean;
+  userAgent?: string;
+}
+
 export interface TurnstileResult {
   token: string;
   /** USD deducted from the account balance for this solve. */
@@ -86,6 +98,17 @@ export interface AkamaiResult {
   /** USD deducted from the account balance for this solve. */
   cost: number;
   type: "akamai";
+}
+
+export interface RecaptchaV3Result {
+  token: string;
+  /**
+   * Response discriminator. The API may echo either the bare `recaptchav3`
+   * request type or the hyphenated `recaptcha-v3` slug.
+   */
+  type: "recaptchav3" | "recaptcha-v3";
+  /** USD deducted from the account balance for this solve. */
+  cost: number;
 }
 
 export interface BalanceResult {
@@ -139,6 +162,13 @@ interface APISolveAkamaiBody {
   cookies: { [key: string]: string };
   cost?: number;
   type: "akamai";
+}
+
+interface APISolveRecaptchaV3Body {
+  success: true;
+  token: string;
+  cost?: number;
+  type: "recaptchav3" | "recaptcha-v3";
 }
 
 interface APIBalanceBody {
@@ -202,7 +232,7 @@ const DEFAULT_BASE_URL = "https://api.nslsolver.com";
 const DEFAULT_TIMEOUT = 120_000;
 const DEFAULT_MAX_RETRIES = 3;
 
-/** API client for solving Cloudflare Turnstile, Challenge, Kasada, and Akamai captchas. */
+/** API client for solving Cloudflare Turnstile, Challenge, Kasada, Akamai, and reCAPTCHA v3 captchas. */
 export class NSLSolver {
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -306,6 +336,27 @@ export class NSLSolver {
     };
   }
 
+  /** Solve a reCAPTCHA v3 (or reCAPTCHA Enterprise) challenge. Proxy is required. */
+  async solveRecaptchaV3(params: RecaptchaV3Params): Promise<RecaptchaV3Result> {
+    const body: Record<string, unknown> = {
+      type: "recaptchav3",
+      site_key: params.siteKey,
+      url: params.url,
+      proxy: params.proxy,
+    };
+    if (params.action !== undefined) body.action = params.action;
+    if (params.enterprise) body.enterprise = true;
+    if (params.userAgent !== undefined) body.user_agent = params.userAgent;
+
+    const data = await this.request<APISolveRecaptchaV3Body>("POST", "/solve", body);
+
+    return {
+      token: data.token,
+      type: data.type,
+      cost: data.cost ?? 0,
+    };
+  }
+
   /** Get account balance, plan flags, and live CPM usage. */
   async getBalance(): Promise<BalanceResult> {
     const data = await this.request<APIBalanceBody>("GET", "/balance");
@@ -337,10 +388,15 @@ export class NSLSolver {
     }
 
     let lastError: Error | undefined;
+    let retryAfterMs: number | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       if (attempt > 0) {
-        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30_000);
+        const backoff = Math.min(1000 * Math.pow(2, attempt - 1), 30_000);
+        // Prefer a server-supplied Retry-After over computed backoff, capped.
+        const delay =
+          retryAfterMs !== undefined ? Math.min(retryAfterMs, 60_000) : backoff;
+        retryAfterMs = undefined;
         await this.sleep(delay);
       }
 
@@ -357,15 +413,24 @@ export class NSLSolver {
         });
       } catch (err: unknown) {
         clearTimeout(timer);
-        if (err instanceof DOMException && err.name === "AbortError") {
+        // Detect aborts by name — `instanceof DOMException` is unreliable
+        // across Node/undici builds where the rejection is a plain Error.
+        if (err && (err as { name?: string }).name === "AbortError") {
           lastError = new NSLSolverError(
             `Request timed out after ${this.timeout}ms`,
           );
           continue;
         }
-        lastError = new NSLSolverError(
+        const networkError = new NSLSolverError(
           `Network error: ${err instanceof Error ? err.message : String(err)}`,
         );
+        // Unrecoverable connection failures (bad host, refused) will never
+        // succeed on retry — surface them immediately instead of burning the
+        // full backoff budget.
+        if (NSLSolver.isFatalNetworkError(err)) {
+          throw networkError;
+        }
+        lastError = networkError;
         continue;
       } finally {
         clearTimeout(timer);
@@ -379,7 +444,10 @@ export class NSLSolver {
           `Failed to parse API response (HTTP ${response.status})`,
           response.status,
         );
-        if (response.status >= 500) continue;
+        if (response.status >= 500) {
+          retryAfterMs = NSLSolver.parseRetryAfter(response);
+          continue;
+        }
         throw lastError;
       }
 
@@ -401,9 +469,11 @@ export class NSLSolver {
           throw new ForbiddenError(errorMessage);
         case 429:
           lastError = new RateLimitError(errorMessage);
+          retryAfterMs = NSLSolver.parseRetryAfter(response);
           continue;
         case 503:
           lastError = new SolveError(errorMessage, 503);
+          retryAfterMs = NSLSolver.parseRetryAfter(response);
           continue;
         default:
           throw new NSLSolverError(errorMessage, response.status);
@@ -415,6 +485,48 @@ export class NSLSolver {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Classify connection failures that can never succeed on retry (bad host,
+   * malformed URL, refused connection) so the client fails fast instead of
+   * exhausting its retry budget. Inspects both the Node `code`/`cause.code`
+   * and the error message for portability across runtimes.
+   */
+  private static isFatalNetworkError(err: unknown): boolean {
+    if (!err || typeof err !== "object") return false;
+    const fatalCodes = ["ENOTFOUND", "ECONNREFUSED", "ERR_INVALID_URL"];
+    const candidate = err as {
+      code?: string;
+      message?: string;
+      cause?: { code?: string };
+    };
+    const code = candidate.code ?? candidate.cause?.code;
+    if (code && fatalCodes.includes(code)) return true;
+    const message = candidate.message ?? "";
+    return fatalCodes.some((c) => message.includes(c));
+  }
+
+  /**
+   * Parse a `Retry-After` header (delta-seconds or HTTP-date) into milliseconds.
+   * Returns undefined when absent or unparseable. The NSLSolver tier does not
+   * currently emit this header; this is purely defensive for proxies/future use.
+   */
+  private static parseRetryAfter(response: Response): number | undefined {
+    const raw = response.headers.get("retry-after");
+    if (!raw) return undefined;
+
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds)) {
+      return seconds > 0 ? seconds * 1000 : 0;
+    }
+
+    const dateMs = Date.parse(raw);
+    if (!Number.isNaN(dateMs)) {
+      return Math.max(0, dateMs - Date.now());
+    }
+
+    return undefined;
   }
 }
 

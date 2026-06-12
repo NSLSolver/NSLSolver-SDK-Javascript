@@ -1,6 +1,6 @@
 # NSLSolver Node.js SDK
 
-Node.js client for the [NSLSolver](https://nslsolver.com) captcha API. Zero dependencies, TypeScript support, uses native `fetch`.
+Node.js client for the [NSLSolver](https://nslsolver.com) captcha API. Solves Cloudflare Turnstile, Cloudflare Challenge, Kasada, Akamai Bot Manager, and reCAPTCHA v3. Zero dependencies, TypeScript support, uses native `fetch`.
 
 Requires Node.js 18+.
 
@@ -47,13 +47,42 @@ const { headers, cost } = await solver.solveKasada({
   uaVersion: 131,
   kasadaConfig: {
     pJsPath: '/149e9513-01fa-4fb0-aad4-566afd725d1b/2d206a39-8ed7-437e-a3be-862e0f06eea3/p.js',
-    fpHost: 'https://fp.example.com',
-    tlHost: 'https://tl.example.com',
+    // fpHost / tlHost are bare hostnames — no scheme, no path.
+    fpHost: 'fp.example.com',
+    tlHost: 'tl.example.com',
     // cdConstant is optional
   },
   // proxy is optional
 });
 // headers["x-kpsdk-ct"], headers["x-kpsdk-cd"], etc.
+```
+
+### Akamai
+
+```js
+const { cookies, cost } = await solver.solveAkamai({
+  url: 'https://example.com',
+  // Akamai fingerprints the UA — replay with the exact value you submit.
+  userAgent: 'Mozilla/5.0 ... Chrome/131.0.0.0 ...',
+  // Proxy is required; the _abck cookie is bound to its egress IP.
+  proxy: 'http://user:pass@host:port',
+});
+// cookies["_abck"], cookies["bm_sz"], etc.
+```
+
+### reCAPTCHA v3
+
+```js
+const { token, cost } = await solver.solveRecaptchaV3({
+  siteKey: '6Lc...',
+  url: 'https://example.com',
+  proxy: 'http://user:pass@host:port', // required
+  // action defaults to "verify" server-side when omitted
+  action: 'login',
+  // set enterprise: true for reCAPTCHA Enterprise
+  enterprise: false,
+  // userAgent is optional
+});
 ```
 
 ### Balance

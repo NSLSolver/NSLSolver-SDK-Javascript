@@ -1,6 +1,6 @@
 {
   "name": "nslsolver",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Official Node.js SDK for the NSLSolver captcha solving API",
   "author": "NSLSolver",
   "license": "MIT",
@@ -23,7 +23,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build"
+    "test": "node --test",
+    "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
     "captcha",
@@ -34,7 +35,10 @@
     "captcha-solver",
     "cloudflare-turnstile",
     "challenge",
-    "kasada"
+    "kasada",
+    "akamai",
+    "recaptcha",
+    "recaptcha-v3"
   ],
   "engines": {
     "node": ">=18.0.0"
